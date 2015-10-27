@@ -2,31 +2,38 @@
 /*
 **********************************************
 
-     *** StripeCX Checkout for WHMCS ***
+     *** GateCX Checkout for WHMCS ***
 
 File:					stripecx.php
-File version:			0.0.2
-Date:					07-01-2015
+File version:			0.0.3
+Date:					27-10-2015
 
-Copyright (C) NetDistrict 2014 - 2015
+Copyright (C) NetDistrict 2014 - 2016
 All Rights Reserved
 **********************************************
 */
 
+use Illuminate\Database\Capsule\Manager as Capsule;
+
 function stripecx_config() {
-	if(mysql_num_rows(mysql_query("SHOW TABLES LIKE 'stripecx_transactions'"))==1) 
-    $db_table = 'Uninstall';
+	
+	$pdo = Capsule::connection()->getPdo();
+	
+	$result = $pdo->query("SHOW TABLES LIKE 'stripecx_transactions'");
+	$row = $result->fetch(PDO::FETCH_ASSOC);
+		
+	if($row!=false) $db_table = 'Uninstall';
 	else $db_table = 'Install';
 
 	$configarray = array(
-		"FriendlyName" => array("Type" => "System", "Value"=>"StripeCX"),
+		"FriendlyName" => array("Type" => "System", "Value"=>"GateCX"),
 		"private-key" => array("FriendlyName" => "Private Key", "Type" => "text", "Size" => "20", ),
 		"public-key" => array("FriendlyName" => "Public Key", "Type" => "text", "Size" => "20", ),
 		"validatezip" => array("FriendlyName" => "Validate ZIP Code", "Type" => "yesno", "Description" => "Specify whether Checkout should validate the billing ZIP code.", ),
 		"rememberme" => array("FriendlyName" => "Remember Me", "Type" => "yesno", "Description" => "Specify whether to include the option to \"Remember Me\" for future purchases (true or false).", ),
 		"sendfailedmail" => array("FriendlyName" => "Send Failed Mail", "Type" => "yesno", "Description" => "Send an e-mail to the client when the credit card payment fails (recommended).", ),
 		"image-url" => array("FriendlyName" => "Image URL", "Type" => "text", "Size" => "100%", "Description" => "<br />A URL pointing to a square image of your brand or product. The recommended minimum size is 128x128px",),
-		"setup" => array("FriendlyName" => "Transaction table", "Description" => "<input class=\"btn btn-small\" type=button onClick=\"location.href='?stripecx=".$db_table."'\" value='".$db_table."'> Tables must be installed in order to use this gateway.<br /><small style=\"float:right;\">Copyright &copy; 2014 <a href=\"http://www.netdistrict.co.uk\">NetDistrict</a>. All rights reserved.</small>",),
+		"setup" => array("FriendlyName" => "Transaction table", "Description" => "<input class=\"btn btn-default btn-sm\" type=button onClick=\"location.href='?stripecx=".$db_table."'\" value='".$db_table."'> Tables must be installed in order to use this gateway.<br /><small style=\"float:right;\">Copyright &copy; 2014 - 2016 <a href=\"http://www.netdistrict.co.uk\">NetDistrict</a>. All rights reserved.</small>",),
     );
 	return $configarray;
 	
@@ -34,6 +41,8 @@ function stripecx_config() {
 
 function stripecx_link($params) {
 	global $whmcs;
+	
+	$pdo = Capsule::connection()->getPdo();
 	
 	# Invoice Variables
 	$invoiceid = $params['invoiceid'];
@@ -67,9 +76,10 @@ function stripecx_link($params) {
 	}
 	
 	$sql = "SELECT * FROM stripecx_transactions WHERE invoice_id = '$invoiceid'";
-	$result = mysql_query($sql) or die(mysql_error);
+	$result = $pdo->query($sql);
+	$row = $result->fetch(PDO::FETCH_ASSOC);
 	
-	if (mysql_num_rows($result)){
+	if ($row){
 		$pending_trans = "
 		<script>
 			$(document).ready(function() {
@@ -87,16 +97,18 @@ function stripecx_link($params) {
 	} else { $pending_trans = NULL; }
 
 	# Enter your code submit to the gateway...
-
+	
 	$code = "
 	<script src=\"https://checkout.stripe.com/v2/checkout.js\"></script>
-	<script src=\"includes/jscript/jquery.js\"></script>
+	<script src=\"assets/js/jquery.js\"></script>
 	
 	".$pending_trans."
 	<form>
 	<button id=\"StripeCXbutton\">".$params['langpaynow']."</button>
 </form>
-	<script>		
+	<script>
+	$ = jQuery;		
+	
 		var handler = StripeCheckout.configure({
 			key: '".$params['public-key']."',
 			image: '".$params['image-url']."',
@@ -185,7 +197,7 @@ function stripecx_createrefund($params,$transid,$amount)
 	// Send refund request
     $ch = curl_init('https://api.stripe.com/v1/charges/'.$transid.'/refund');
 
-	curl_setopt($ch, CURLOPT_HTTPHEADER, array('X-Client: StripeCX v0.0.1'));
+	curl_setopt($ch, CURLOPT_HTTPHEADER, array('X-Client: GateCX v0.0.3'));
 	curl_setopt($ch, CURLOPT_HEADER, 0);
 	curl_setopt($ch, CURLOPT_USERPWD, $params['private-key'] . ":" . NULL);
 	curl_setopt($ch, CURLOPT_TIMEOUT, 5);
@@ -204,20 +216,54 @@ function stripecx_createrefund($params,$transid,$amount)
 
 if ($_REQUEST['stripecx'] == 'Install') {
 	// Install required database table
-	$query = "CREATE TABLE IF NOT EXISTS `stripecx_transactions` (
-		`id` int(5) NOT NULL AUTO_INCREMENT,
-		`invoice_id` int(32) NOT NULL,
-		`transaction_id` varchar(512) NOT NULL,
-		PRIMARY KEY (`id`),
-		UNIQUE KEY `id` (`id`)
-	) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;";
+	$pdo = Capsule::connection()->getPdo();
 	
-	mysql_query($query) or die(mysql_error);
+	$pdo->beginTransaction();
+		 
+	try {			
+		$query = "CREATE TABLE IF NOT EXISTS `stripecx_transactions` (
+			`id` int(5) NOT NULL AUTO_INCREMENT,
+			`invoice_id` int(32) NOT NULL,
+			`transaction_id` varchar(512) NOT NULL,
+			PRIMARY KEY (`id`),
+			UNIQUE KEY `id` (`id`)
+		) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=1 ;";
+				
+		$statement = $pdo->prepare($query);
+		$statement->execute();
+	
+		// COMMIT QUERYS			 
+		$pdo->commit();
+			
+	} catch (\Exception $e) {
+			
+		$pdo->rollBack();			
+		logActivity('Error during GateCX activation: '.$e->getMessage());
+	}
 }
 
 if ($_REQUEST['stripecx'] == 'Uninstall') {
 	// Remove required database table
-	$query = "DROP TABLE IF EXISTS `stripecx_transactions`;";	
-	mysql_query($query) or die(mysql_error);
+	$pdo = Capsule::connection()->getPdo();
+
+	$pdo->beginTransaction();
+		 
+	try {	
+			
+		$query = "DROP TABLE IF EXISTS `stripecx_transactions`;";	
+					
+		$statement = $pdo->prepare($query);
+		$statement->execute();
+		
+		// COMMIT QUERYS			 
+		$pdo->commit();
+			
+	} catch (\Exception $e) {
+			
+		$pdo->rollBack();			
+		logActivity('Error during GateCX deactivation: '.$e->getMessage());
+		
+	}
+
 }
 ?>

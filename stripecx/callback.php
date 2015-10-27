@@ -2,29 +2,34 @@
 /*
 **********************************************
 
-     *** StripeCX Checkout for WHMCS ***
+     *** GateCX Checkout for WHMCS ***
 
 File:					stripecx/callback.php
-File version:			0.0.1
-Date:					05-08-2014
+File version:			0.0.3
+Date:					27-10-2015
 
-Copyright (C) NetDistrict 2014
+Copyright (C) NetDistrict 2014 - 2016
 All Rights Reserved
 **********************************************
 */
 
-# Required File Includes
-include("../../../dbconnect.php");
-include("../../../includes/functions.php");
-include("../../../includes/gatewayfunctions.php");
-include("../../../includes/invoicefunctions.php");
+use WHMCS\Module\Gateway;
+use WHMCS\Terminus;
+use Illuminate\Database\Capsule\Manager as Capsule;
 
-$gatewaymodule = "stripecx"; # Enter your gateway module name here replacing template
+# Required File Includes
+include "../../../init.php";
+include ROOTDIR . DIRECTORY_SEPARATOR . 'includes/functions.php';
+include ROOTDIR . DIRECTORY_SEPARATOR . 'includes/gatewayfunctions.php';
+include ROOTDIR . DIRECTORY_SEPARATOR . 'includes/invoicefunctions.php';
+
+$gatewaymodule = "stripecx";
 
 function stripecx_capture($amount,$currency,$token,$invoice)
 {	
-	global $gatewaymodule;
-	$GATEWAY = getGatewayVariables($gatewaymodule);
+	global $gateway;
+	
+	$GATEWAY = $gateway->getParams();
 	
 	// Post data variables
 	$data = 'amount='.$amount.'&currency='.$currency.'&card='.$token.'&description='.$invoice;
@@ -32,7 +37,7 @@ function stripecx_capture($amount,$currency,$token,$invoice)
 	// Send Capture Request
     $ch = curl_init('https://api.stripe.com/v1/charges');
 
-	curl_setopt($ch, CURLOPT_HTTPHEADER, array('X-Client: StripeCX v0.0.1'));
+	curl_setopt($ch, CURLOPT_HTTPHEADER, array('X-Client: GateCX v0.0.3'));
 	curl_setopt($ch, CURLOPT_HEADER, 0);
 	curl_setopt($ch, CURLOPT_USERPWD, $GATEWAY['private-key'] . ":" . NULL);
 	curl_setopt($ch, CURLOPT_TIMEOUT, 5);
@@ -49,14 +54,23 @@ function stripecx_capture($amount,$currency,$token,$invoice)
     return $return;
 }
 
-# Process and store transaction
+# Ensure that the module is active before attempting to run any code
+$gateway = new Gateway();
+
+if (!$gateway->isActiveGateway($gatewaymodule) || !$gateway->load($gatewaymodule)) {
+    Terminus::getInstance()->doDie('Module not Active');
+}
+
+$pdo = Capsule::connection()->getPdo();
+
+# Process and store transaction	
 if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
  
 	$ca = new WHMCS_ClientArea();
 		 
 	# Check login status
 	if ($ca->isLoggedIn()) {
-
+		
 		$invoice_id = (int)$_REQUEST['id'];
 		$store_token = $_REQUEST['token'];
 		$currency = $_REQUEST['currency'];
@@ -65,9 +79,9 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 		if (preg_match("#^[A-Z]{3}$#", $currency) && preg_match("#^[a-zA-Z 0-9\_\-]*$#", $store_token)) {
 
 			//Get invoice details
-			$sql = "SELECT * FROM tblinvoices WHERE id = '$invoice_id'";
-			$result = mysql_query($sql) or die(mysql_error);
-			$row = mysql_fetch_array($result);
+			$sql = "SELECT * FROM tblinvoices WHERE id = '$invoice_id'";			
+			$result = $pdo->query($sql);
+			$row = $result->fetch(PDO::FETCH_ASSOC);
 			
 			$invoice_num = $row['invoicenum'];
 			
@@ -75,20 +89,24 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 						
 			//Create Capture request
 			$capture = json_decode(stripecx_capture($amount,$currency,$token,$invoice_num));
-						
+
 			if ($capture->id == NULL) {
 				if ($capture->error->charge) {
 					$store_transaction = $capture->error->charge;
+				} elseif ($capture->error) {
+					logActivity('GateCX capture failed: '.$capture->error->message);		
 				}
 			} else {
 				$store_transaction = $capture->id;
 			}
-			
+
 			if (!empty($store_transaction)) {						
 				$sql = "INSERT INTO stripecx_transactions (invoice_id, transaction_id) VALUES ('$invoice_id', '$store_transaction')";
-				mysql_query($sql) or die(mysql_error);
+				$result = $pdo->query($sql);
 			}
 		}
+	} else {
+		logActivity('GateCX error: Unable to store transaction details for invoice ID: '.(int)$_REQUEST['id']);	
 	}
 		
 } else {
@@ -101,6 +119,11 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 	$input = @file_get_contents("php://input");
 	$event_json = json_decode($input);
 	
+	if (!$event_json) { 
+		header("HTTP/1.1 400 BAD REQUEST"); 
+		exit();
+	}
+	
 	// Process returned data
 	$transid = $event_json->data->object->id;
 	$type = $event_json->type;
@@ -112,9 +135,20 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 	
 	//Get invoice id from database
 	$sql = "SELECT * FROM stripecx_transactions WHERE transaction_id = '$transid'";
-	$result = mysql_query($sql) or die(mysql_error);
-	$row = mysql_fetch_array($result);
+	$result = $pdo->query($sql);
+	$row = $result->fetch(PDO::FETCH_ASSOC);
+
 	$invoice = $row['invoice_id'];
+	
+	if (empty($invoice)) {
+		$transid = $event_json->data->object->charge;
+		
+		$sql = "SELECT * FROM stripecx_transactions WHERE transaction_id = '$transid'";
+		$result = $pdo->query($sql);
+		$row = $result->fetch(PDO::FETCH_ASSOC);
+	
+		$invoice = $row['invoice_id'];
+	}
 	
 	if ($type == 'charge.succeeded' && $invoice == '') {
 		header("HTTP/1.1 400 BAD REQUEST");
@@ -122,17 +156,17 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 		exit();
 	} elseif ($invoice == NULL) {
 		$sql = "SELECT * FROM tblaccounts WHERE transid = '$transid'";
-		$result = mysql_query($sql) or die(mysql_error);
-		$row = mysql_fetch_array($result);
+		$result = $pdo->query($sql);
+		$row = $result->fetch(PDO::FETCH_ASSOC);
+
 		$invoice = $row['invoiceid'];
 	}
-	
+
 	$invoiceid = checkCbInvoiceID($invoice,$GATEWAY['name']); # Checks invoice ID is a valid invoice number or ends processing
 
-	if ($type == 'charge.succeeded')
-	checkCbTransID($transid); # Checks transaction number isn't already in the database and ends processing if it does
-
 	if ($type == 'charge.succeeded') {
+		checkCbTransID($transid); # Checks transaction number isn't already in the database and ends processing if it does
+
 		# Successful
 		addInvoicePayment($invoiceid,$transid,$amount,$fee,$gatewaymodule); # Apply Payment to Invoice: invoiceid, transactionid, amount paid, fees, modulename
 		
@@ -141,10 +175,6 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 				"\r\nStatus: " .$type;
 								
 		logTransaction($GATEWAY["name"],$output,"Successful"); # Save to Gateway Log: name, data array, status
-
-		// Remove transaction from processing table
-		$sql = "DELETE FROM stripecx_transactions WHERE invoice_id='$invoiceid'";
-		mysql_query($sql) or die(mysql_error);
 		
 	} elseif ($type == 'charge.refunded') {
 		# Refunded	
@@ -156,7 +186,7 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 						
 		// Remove transaction from processing table if it is there
 		$sql = "DELETE FROM stripecx_transactions WHERE invoice_id='$invoiceid'";
-		mysql_query($sql) or die(mysql_error);
+		$pdo->query($sql);
 	
 	} elseif ($type == 'charge.updated') {
 		# Updated
@@ -188,7 +218,7 @@ if (isset($_REQUEST['id']) && !empty($_REQUEST['id'])) {
 		
 		// Remove transaction from processing table
 		$sql = "DELETE FROM stripecx_transactions WHERE invoice_id='$invoiceid'";
-		mysql_query($sql) or die(mysql_error);
+		$pdo->query($sql);
 	
 	} elseif ($type == 'charge.dispute.created' || $type == 'charge.dispute.updated' || $type == 'charge.dispute.closed') {
 		# Dispute
