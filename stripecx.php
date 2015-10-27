@@ -5,10 +5,10 @@
      *** StripeCX Checkout for WHMCS ***
 
 File:					stripecx.php
-File version:			0.0.1
-Date:					05-08-2014
+File version:			0.0.2
+Date:					07-01-2015
 
-Copyright (C) NetDistrict 2014
+Copyright (C) NetDistrict 2014 - 2015
 All Rights Reserved
 **********************************************
 */
@@ -34,7 +34,7 @@ function stripecx_config() {
 
 function stripecx_link($params) {
 	global $whmcs;
-
+	
 	# Invoice Variables
 	$invoiceid = $params['invoiceid'];
 	$description = $params["description"];
@@ -52,6 +52,19 @@ function stripecx_link($params) {
 	# Config Options
 	if ($params['validatezip'] == 'on') { $zipCodeValidation = 'true'; } else  { $zipCodeValidation = 'false'; }
 	if ($params['rememberme'] == 'on') { $RememberMe = 'true'; } else  { $RememberMe = 'false'; }
+	
+	# Redirect If Checkout From Cart
+	$cart = $_REQUEST['a'];
+	if ($cart == 'complete') {
+		header('Location: viewinvoice.php?id='.$invoiceid.'&stripecx');
+	} 
+	
+	# Auto-Start StripeCX?
+	if (isset($_REQUEST['stripecx'])) {
+		$start_sx = true;	
+	} else {
+		$start_sx = false;	
+	}
 	
 	$sql = "SELECT * FROM stripecx_transactions WHERE invoice_id = '$invoiceid'";
 	$result = mysql_query($sql) or die(mysql_error);
@@ -81,7 +94,6 @@ function stripecx_link($params) {
 	
 	".$pending_trans."
 	<form>
-	<input type=\"hidden\" name=\"checkyear\" id=\"checkyear\" value=\"test\">
 	<button id=\"StripeCXbutton\">".$params['langpaynow']."</button>
 </form>
 	<script>		
@@ -130,6 +142,15 @@ function stripecx_link($params) {
 		}
 	</script>
 	";
+	
+	if ($start_sx == true) {
+		$code = $code ."
+		<script>
+			document.getElementById('StripeCXbutton').click();
+		</script>
+		";	
+	}
+	
 	return $code;
 }
 

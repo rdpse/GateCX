@@ -3,7 +3,7 @@
      *** StripeCX Checkout for WHMCS ***
 
 
-Copyright (C) NetDistrict 2014
+Copyright (C) NetDistrict 2014-2015
 All Rights Reserved
 
 **********************************************
@@ -21,7 +21,7 @@ To install:
  ## For testing use your testing API keys from Stripe.
 
 5. Add the callback script to the Stripe Webhooks
-   Example: https://example.com/whmcs/modules/gateways/stripecx/callback.php
+   Example: https://example.com/whmcs/modules/gateways/stripecx.callback.php
 
 
 You are now ready to start use the StripeCX gateway.
@@ -32,4 +32,4 @@ SUPPORT:
 This is free software and not supported.
 
 Premium support is available at:
- - https://ssc.netdistrict.net/submitticket.php?step=2&deptid=1
+ - https://my.netdistrict.net/submitticket.php?step=2&deptid=1
